@@ -588,7 +588,7 @@ with aba_a:
         c1, c2, c3, c4 = st.columns(4)
         cartao(c1, "c-emb", len(emb), "Embrepar")
         cartao(c2, "c-rede", len(rede), "Rede")
-        cartao(c3, "c-fora", len(fora), "Fora (cotar)")
+        cartao(c3, "c-fora", len(fora), "Cotação FORA")
         cartao(c4, "c-nc", len(nc), "Não classificados")
         st.write("")
 
@@ -621,8 +621,8 @@ with aba_a:
             use_container_width=True)
 
         st.download_button(
-            "📨 Cotação em branco (mandar aos fornecedores)",
-            data=cotacao, file_name="cotacao_fornecedores.xlsx",
+            "📄 Cotação FORA (negociar em grande escala)",
+            data=cotacao, file_name="cotacao_fora.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True)
 
@@ -633,7 +633,8 @@ with aba_a:
                 data=arq_nc, file_name="nao_classificados.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-        st.info("Mande o arquivo de **cotação em branco** pros 3 fornecedores. Quando devolverem preenchido, vá na aba **Etapa B**.")
+        st.info("📄 A **Cotação FORA** é a lista dos itens que os compradores negociam em grande escala (compra de lote). "
+                "Para a **Embrepar**, use a aba **🧲 Condensador**.")
 
 # ---------------- CONDENSADOR EMBREPAR ----------------
 with aba_cond:
@@ -903,7 +904,7 @@ with aba_cfg:
     st.subheader("Marcas cadastradas por categoria")
     st.write("Estas são as marcas fixas. Se aparecer marca 'não classificada', é porque ela não está aqui.")
     c1, c2, c3 = st.columns(3)
-    cartao(c1, "c-fora", len(categorias["FORA"]), "Fora (cotar)")
+    cartao(c1, "c-fora", len(categorias["FORA"]), "Cotação FORA")
     cartao(c2, "c-emb", len(categorias["EMBREPAR"]), "Embrepar")
     cartao(c3, "c-rede", len(categorias["REDE"]), "Rede")
     st.write("")
