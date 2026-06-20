@@ -472,9 +472,32 @@ def excel_relatorio(abas, resumo_sheet, nomes):
     return buf.getvalue()
 
 
+def pedido_bytes(pedido):
+    """Gera o .xlsx de um pedido com uma linha TOTAL (soma de quantidade e valor) no fim."""
+    from openpyxl.styles import Font, PatternFill
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        pedido.to_excel(writer, sheet_name="Pedido", index=False)
+        ws = writer.sheets["Pedido"]
+        n = len(pedido)
+        total_qtd = int(pedido["Quantidade"].sum())
+        total_val = round(float(pedido["Total"].sum()), 2)
+        r = n + 2  # linha 1 = cabeçalho, n linhas de itens, total logo abaixo
+        ws.cell(row=r, column=1, value="TOTAL")
+        ws.cell(row=r, column=4, value=total_qtd)
+        ws.cell(row=r, column=6, value=total_val)
+        amarelo = PatternFill("solid", fgColor="FFF2CC")
+        for c in range(1, 7):
+            cel = ws.cell(row=r, column=c)
+            cel.font = Font(bold=True)
+            cel.fill = amarelo
+    buf.seek(0)
+    return buf.getvalue()
+
+
 def zip_pedidos(resumo, nomes):
     """Gera um ZIP com um arquivo de pedido (.xlsx) por fornecedor vencedor,
-    cada um com os itens que ele ganhou + preço acordado + total."""
+    cada um com os itens que ele ganhou + preço acordado + total + linha TOTAL."""
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         for nome in nomes:
@@ -484,7 +507,7 @@ def zip_pedidos(resumo, nomes):
             pedido = d[["Código", "Produto", "Marca", "Quantidade", "Preço unit", "Total"]].rename(
                 columns={"Preço unit": "Preço"})
             nome_limpo = re.sub(r"[^A-Za-z0-9_-]+", "_", str(nome)).strip("_") or "fornecedor"
-            z.writestr(f"pedido_{nome_limpo}.xlsx", excel_bytes({"Pedido": pedido}))
+            z.writestr(f"pedido_{nome_limpo}.xlsx", pedido_bytes(pedido))
     buf.seek(0)
     return buf.getvalue()
 
