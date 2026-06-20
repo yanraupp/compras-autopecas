@@ -702,6 +702,8 @@ with aba_b:
             qtd = acha_coluna(df, "Quantidade", "Qtd")
             preco = acha_coluna(df, "PREÇO CONCORRENTE (R$)", "Preço concorrente",
                                 "PREÇO UNIT (R$)", "Preço unit", "Preço", "Preco", "Valor")
+            ref = acha_coluna(df, "Preço Referência (R$)", "Preço referencia",
+                              "Preço Embrepar (R$)", "Preço Embrepar")
             if cod is None or preco is None:
                 st.error(f"A cotação de '{nome}' precisa ter as colunas 'Código' e 'PREÇO CONCORRENTE (R$)' "
                          "(ou 'PREÇO UNIT (R$)').")
@@ -717,12 +719,21 @@ with aba_b:
                 precos.setdefault(codigo, {})
                 if p is not None:
                     precos[codigo][nome] = p
+                # preço de referência da Embrepar entra na disputa (pregão)
+                if ref is not None:
+                    pr = para_preco(r[ref])
+                    if pr is not None:
+                        precos[codigo]["Embrepar"] = pr
                 if codigo not in info:
                     info[codigo] = (
                         str(r[prod]).strip() if prod else "",
                         str(r[marca]).strip() if marca else "",
                         so_numero_qtd(r[qtd]) if qtd else 0,
                     )
+
+        # se algum item tem preço de referência, a Embrepar vira um "concorrente" na disputa
+        if any("Embrepar" in pmap for pmap in precos.values()) and "Embrepar" not in nomes:
+            nomes.append("Embrepar")
 
         # monta resumo
         linhas = []
