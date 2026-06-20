@@ -85,6 +85,18 @@ def aplica_estilo():
         }
         [data-testid="stExpander"] summary p { font-weight: 700 !important; }
         [data-testid="stExpander"] summary:hover p { color: #ffb53d !important; }
+        /* fundo do cabeçalho do expander sempre escuro (Streamlit às vezes joga branco) */
+        [data-testid="stExpander"] summary,
+        [data-testid="stExpander"] details summary {
+            background: #141a28 !important;
+        }
+        /* botões dentro do expander: texto escuro (não herdar o claro do conteúdo) */
+        [data-testid="stExpanderDetails"] .stButton button,
+        [data-testid="stExpanderDetails"] .stButton button *,
+        [data-testid="stExpanderDetails"] .stDownloadButton button,
+        [data-testid="stExpanderDetails"] .stDownloadButton button * {
+            color: #1a1f2b !important;
+        }
         /* botões claros (download/secundário) têm fundo branco -> texto escuro */
         .stButton button p, .stButton button span, .stButton button div,
         .stDownloadButton button p, .stDownloadButton button span, .stDownloadButton button div {
@@ -423,6 +435,39 @@ def excel_bytes(abas: dict):
     with pd.ExcelWriter(buf, engine="openpyxl") as writer:
         for nome, df in abas.items():
             df.to_excel(writer, sheet_name=nome[:31], index=False)
+    buf.seek(0)
+    return buf.getvalue()
+
+
+def excel_relatorio(abas, resumo_sheet, nomes):
+    """Igual ao excel_bytes, mas na aba de resumo pinta o MENOR preço de verde
+    e o MAIOR de vermelho em cada linha (entre as colunas dos fornecedores)."""
+    from openpyxl.styles import PatternFill
+    buf = io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as writer:
+        for nome, df in abas.items():
+            df.to_excel(writer, sheet_name=nome[:31], index=False)
+        ws = writer.sheets[resumo_sheet[:31]]
+        df_res = abas[resumo_sheet]
+        cols = list(df_res.columns)
+        idxs = {n: cols.index(n) + 1 for n in nomes if n in cols}
+        verde = PatternFill("solid", fgColor="C6EFCE")
+        vermelho = PatternFill("solid", fgColor="FFC7CE")
+        for ri in range(len(df_res)):
+            valores = {}
+            for n, ci in idxs.items():
+                v = df_res.iloc[ri][n]
+                if pd.notna(v):
+                    valores[ci] = float(v)
+            if not valores:
+                continue
+            vmin, vmax = min(valores.values()), max(valores.values())
+            for ci, v in valores.items():
+                cell = ws.cell(row=ri + 2, column=ci)
+                if v == vmin:
+                    cell.fill = verde
+                elif v == vmax:
+                    cell.fill = vermelho
     buf.seek(0)
     return buf.getvalue()
 
@@ -812,7 +857,8 @@ with aba_b:
         cbaixa, czip = st.columns(2)
         cbaixa.download_button(
             "📥 Baixar relatório completo",
-            data=excel_bytes(abas), file_name="resultado_cotacao.xlsx",
+            data=excel_relatorio(abas, "Resumo menor preço", nomes),
+            file_name="resultado_cotacao.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             type="primary", use_container_width=True)
         czip.download_button(
