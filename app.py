@@ -7,6 +7,7 @@ Fase 1: Etapa A (separar) + Etapa B (comparar preços).
 import io
 import re
 import json
+import zipfile
 import sqlite3
 import unicodedata
 from datetime import datetime, date, timedelta
@@ -426,6 +427,23 @@ def excel_bytes(abas: dict):
     return buf.getvalue()
 
 
+def zip_pedidos(resumo, nomes):
+    """Gera um ZIP com um arquivo de pedido (.xlsx) por fornecedor vencedor,
+    cada um com os itens que ele ganhou + preço acordado + total."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for nome in nomes:
+            d = resumo[resumo["Vencedor"] == nome]
+            if d.empty:
+                continue
+            pedido = d[["Código", "Produto", "Marca", "Quantidade", "Preço unit", "Total"]].rename(
+                columns={"Preço unit": "Preço"})
+            nome_limpo = re.sub(r"[^A-Za-z0-9_-]+", "_", str(nome)).strip("_") or "fornecedor"
+            z.writestr(f"pedido_{nome_limpo}.xlsx", excel_bytes({"Pedido": pedido}))
+    buf.seek(0)
+    return buf.getvalue()
+
+
 # ----------------------------------------------------------------------------
 # Banco de dados (histórico de cotações)
 # ----------------------------------------------------------------------------
@@ -791,17 +809,23 @@ with aba_b:
             abas["Ninguem cotou"] = pd.DataFrame(sem_cotacao)[["Código", "Produto", "Marca", "Quantidade"]]
             st.warning(f"{len(sem_cotacao)} item(ns) ninguém cotou — veja a aba 'Ninguem cotou' no arquivo.")
 
-        cbaixa, csalva = st.columns(2)
+        cbaixa, czip = st.columns(2)
         cbaixa.download_button(
-            "📥 Baixar resultado da cotação",
+            "📥 Baixar relatório completo",
             data=excel_bytes(abas), file_name="resultado_cotacao.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             type="primary", use_container_width=True)
+        czip.download_button(
+            "📦 Baixar pedidos por fornecedor (ZIP)",
+            data=zip_pedidos(resumo, nomes), file_name="pedidos_por_fornecedor.zip",
+            mime="application/zip", type="primary", use_container_width=True)
+        st.caption("📦 O ZIP traz um arquivo de pedido por fornecedor (e da Embrepar), "
+                   "só com o que cada um ganhou — é só mandar direto pra ele.")
 
-        with csalva:
+        with st.expander("💾 Salvar no histórico (Dashboard)"):
             data_cot = st.date_input("Data desta cotação", value=date.today(),
                                      format="DD/MM/YYYY", key="data_salvar")
-            if st.button("💾 Salvar no histórico (Dashboard)", use_container_width=True):
+            if st.button("💾 Salvar no histórico"):
                 salvar_cotacao(data_cot, resumo, nomes)
                 st.success(f"Cotação de {data_cot.strftime('%d/%m/%Y')} salva! Veja na aba 📊 Dashboard.")
 
