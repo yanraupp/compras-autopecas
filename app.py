@@ -176,6 +176,25 @@ def aplica_estilo():
             border: 1.5px dashed rgba(255,255,255,.22);
             border-radius: 14px;
         }
+        /* botão Upload/Browse do uploader: fundo claro fixo + texto escuro (não some) */
+        [data-testid="stFileUploader"] button,
+        [data-testid="stFileUploaderDropzone"] button,
+        [data-testid="stBaseButton-secondary"] {
+            background: #f3f6fb !important;
+            color: #1a1f2b !important;
+            border: 1px solid rgba(0,0,0,.18) !important;
+            font-weight: 700 !important;
+        }
+        [data-testid="stFileUploader"] button *,
+        [data-testid="stFileUploaderDropzone"] button * {
+            color: #1a1f2b !important;
+        }
+        [data-testid="stFileUploader"] button:hover,
+        [data-testid="stFileUploaderDropzone"] button:hover {
+            background: #ffffff !important;
+            color: #1a1f2b !important;
+            border-color: #ff6a00 !important;
+        }
         /* tabelas */
         [data-testid="stDataFrame"] { border-radius: 12px; overflow: hidden; }
         </style>
