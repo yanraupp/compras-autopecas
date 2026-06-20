@@ -542,9 +542,11 @@ def checar_senha():
     if st.session_state.get("autenticado"):
         return True
     st.markdown("### 🔒 Acesso restrito")
-    st.write("Digite a senha pra usar o sistema.")
-    senha = st.text_input("Senha", type="password", key="campo_senha")
-    if st.button("Entrar", type="primary"):
+    st.write("Digite a senha pra usar o sistema (aperte Enter ou clique em Entrar).")
+    with st.form("login_form"):
+        senha = st.text_input("Senha", type="password")
+        enviar = st.form_submit_button("Entrar", type="primary")
+    if enviar:
         if senha == senha_correta():
             st.session_state["autenticado"] = True
             st.rerun()
