@@ -1,0 +1,13 @@
+# Senha (nunca subir pro GitHub)
+.streamlit/secrets.toml
+
+# Banco de dados local (histórico de teste)
+dados/historico.db
+dados/*_TESTE.db
+
+# Lixo do sistema / Python
+.DS_Store
+__pycache__/
+*.pyc
+.venv/
+venv/
