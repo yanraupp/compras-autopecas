@@ -700,13 +700,18 @@ with aba_b:
             prod = acha_coluna(df, "Produto")
             marca = acha_coluna(df, "Marca")
             qtd = acha_coluna(df, "Quantidade", "Qtd")
-            preco = acha_coluna(df, "PREÇO UNIT (R$)", "Preço unit", "Preço", "Preco", "Valor")
+            preco = acha_coluna(df, "PREÇO CONCORRENTE (R$)", "Preço concorrente",
+                                "PREÇO UNIT (R$)", "Preço unit", "Preço", "Preco", "Valor")
             if cod is None or preco is None:
-                st.error(f"A cotação de '{nome}' precisa ter as colunas 'Código' e 'PREÇO UNIT (R$)'.")
+                st.error(f"A cotação de '{nome}' precisa ter as colunas 'Código' e 'PREÇO CONCORRENTE (R$)' "
+                         "(ou 'PREÇO UNIT (R$)').")
                 st.stop()
             for _, r in df.iterrows():
                 codigo = str(r[cod]).strip()
                 if not codigo or codigo.lower() == "nan":
+                    continue
+                # pula as linhas-título do condensador (POA / PELOTAS / EM FALTA)
+                if "itens)" in codigo.lower() or codigo.upper() in ("POA", "PELOTAS", "EM FALTA"):
                     continue
                 p = para_preco(r[preco])
                 precos.setdefault(codigo, {})
