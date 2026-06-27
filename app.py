@@ -311,18 +311,55 @@ def ler_erp(arquivo):
         out["Estoque"] = df[col_estoque].astype(str).str.strip()
     if col_situacao:
         out["Situação"] = df[col_situacao].astype(str).str.strip()
+
+    # Preço: tenta pelo nome; se não achar (ex.: coluna E sem cabeçalho), descobre
+    # qual coluna tem valores de preço de verdade.
+    col_preco = acha_coluna(df, "Preço Unit.", "Preço Unit", "Preco Unit.", "Preço",
+                            "Preco", "Valor", "Vlr", "Vlr Unit.", "Custo",
+                            "Preço Referência", "Preço de Custo", "Preço Tabela")
+    if col_preco is None:
+        col_preco = acha_coluna_preco_df(
+            df, {col_codigo, col_produto, col_marca, col_qtd, col_estoque, col_situacao})
+    if col_preco is not None:
+        out["Preço (R$)"] = df[col_preco].apply(para_preco)
+
     # tira linhas totalmente vazias
     out = out[out["Código"].str.len() > 0].reset_index(drop=True)
     return out
 
 
+def acha_coluna_preco_df(df, ignorar):
+    """Acha a coluna de preço de um DataFrame quando ela não tem nome claro:
+    é a coluna (fora as já conhecidas) com mais valores que parecem preço em R$."""
+    melhor, melhor_qtd = None, 0
+    for col in df.columns:
+        if col in ignorar:
+            continue
+        bons = int(df[col].apply(lambda v: para_preco(v) is not None).sum())
+        if bons > melhor_qtd:
+            melhor_qtd, melhor = bons, col
+    return melhor
+
+
+def linhas_da_planilha(arquivo):
+    """Lê qualquer planilha (.xlsx novo OU .xls antigo) e devolve as linhas como
+    lista de tuplas — igual ao iter_rows do openpyxl, mas funciona pros dois formatos."""
+    try:
+        arquivo.seek(0)
+    except Exception:
+        pass
+    # pandas escolhe sozinho o motor: openpyxl pro .xlsx, xlrd pro .xls
+    df = pd.read_excel(arquivo, header=None, dtype=object)
+    linhas = []
+    for row in df.itertuples(index=False, name=None):
+        linhas.append(tuple(None if pd.isna(c) else c for c in row))
+    return linhas
+
+
 def ler_bloco_embrepar(arquivo):
     """Lê uma das planilhas da Embrepar (POA/Pelotas/Falta) e devolve lista de itens.
     Cada arquivo tem layout um pouco diferente, então acha o cabeçalho sozinho."""
-    import openpyxl
-    wb = openpyxl.load_workbook(arquivo, data_only=True)
-    ws = wb.active
-    rows = list(ws.iter_rows(values_only=True))
+    rows = linhas_da_planilha(arquivo)
     hdr_idx, hdr = None, None
     for i, r in enumerate(rows):
         cels = [str(c).strip().lower() if c is not None else "" for c in r]
@@ -338,23 +375,46 @@ def ler_bloco_embrepar(arquivo):
                 return hdr.index(n)
         return None
 
-    ic = idx("produto", "código", "codigo")
+    ic = idx("código", "codigo", "cod", "produto")          # código real primeiro
+    ipd = idx("produto", "descrição", "descricao", "descrição produto")
     im = idx("marca")
     iq = idx("quant.", "quant", "sugestão", "sugestao", "quantidade")
-    ip = idx("preço unit.", "preço unit", "preco unit.", "preço", "preco")
+    ip = idx("preço unit.", "preço unit", "preco unit.", "preço", "preco",
+             "valor", "vlr", "vlr unit.", "custo", "preço referência", "preco referencia")
+
+    # Na planilha da Embrepar a coluna de preço (coluna E) costuma vir SEM cabeçalho.
+    # Se não achei pelo nome, descubro qual coluna tem valores de preço de verdade.
+    if ip is None:
+        ip = acha_coluna_preco(rows, hdr_idx, ignora={ic, ipd, im, iq})
 
     itens = []
     for r in rows[hdr_idx + 1:]:
-        cod = r[ic] if ic is not None else None
+        cod = r[ic] if ic is not None and ic < len(r) else None
         if cod is None or str(cod).strip() == "":
             continue
         itens.append({
             "Código": str(cod).strip(),
-            "Marca": str(r[im]).strip() if im is not None and r[im] is not None else "",
-            "Quantidade": so_numero_qtd(r[iq]) if iq is not None else 0,
-            "Preço Embrepar (R$)": para_preco(r[ip]) if ip is not None else None,
+            "Produto": str(r[ipd]).strip() if ipd is not None and ipd < len(r) and r[ipd] is not None else "",
+            "Marca": str(r[im]).strip() if im is not None and im < len(r) and r[im] is not None else "",
+            "Quantidade": so_numero_qtd(r[iq]) if iq is not None and iq < len(r) else 0,
+            "Preço Embrepar (R$)": para_preco(r[ip]) if ip is not None and ip < len(r) else None,
         })
     return itens
+
+
+def acha_coluna_preco(rows, hdr_idx, ignora):
+    """Descobre a coluna de preço quando ela não tem cabeçalho: é a coluna
+    (fora as já conhecidas) com mais valores que parecem preço em R$."""
+    n_cols = max((len(r) for r in rows[hdr_idx + 1:]), default=0)
+    melhor, melhor_qtd = None, 0
+    for col in range(n_cols):
+        if col in ignora:
+            continue
+        bons = sum(1 for r in rows[hdr_idx + 1:]
+                   if col < len(r) and para_preco(r[col]) is not None)
+        if bons > melhor_qtd:
+            melhor_qtd, melhor = bons, col
+    return melhor
 
 
 def condensar_embrepar(arq_poa, arq_pelotas, arq_falta):
@@ -374,7 +434,7 @@ def condensar_embrepar(arq_poa, arq_pelotas, arq_falta):
         contagem[rotulo] = len(itens)
         blocos.append((rotulo, cor, itens))
 
-    cols = ["Código", "Marca", "Quantidade", "Preço Referência (R$)", "PREÇO CONCORRENTE (R$)"]
+    cols = ["Código", "Produto", "Marca", "Quantidade", "Preço Referência (R$)", "PREÇO CONCORRENTE (R$)"]
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Cotacao Concorrentes"
@@ -401,14 +461,14 @@ def condensar_embrepar(arq_poa, arq_pelotas, arq_falta):
         # itens
         for it in itens:
             ws.append([
-                it["Código"], it["Marca"], it["Quantidade"],
+                it["Código"], it["Produto"], it["Marca"], it["Quantidade"],
                 it["Preço Embrepar (R$)"], "",
             ])
             for c in ws[ws.max_row]:
                 c.border = borda
 
     # larguras
-    larguras = [22, 16, 12, 18, 22]
+    larguras = [18, 32, 16, 12, 18, 22]
     for i, w in enumerate(larguras, start=1):
         ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
     ws.freeze_panes = "A2"
@@ -686,6 +746,8 @@ with aba_a:
         st.write("**Baixe os resultados:**")
 
         cols_compra = ["Código", "Produto", "Marca", "Quantidade"]
+        if "Preço (R$)" in dados.columns:
+            cols_compra.append("Preço (R$)")
         # 1) Arquivo SÓ Embrepar  e  2) arquivo SÓ Rede (separados)
         arq_embrepar = excel_bytes({"Comprar EMBREPAR": emb[cols_compra]})
         arq_rede = excel_bytes({"Comprar REDE": rede[cols_compra]})
