@@ -879,6 +879,10 @@ with aba_b:
                         so_numero_qtd(r[qtd]) if qtd else 0,
                     )
 
+        # nomes dos fornecedores DE VERDADE (o preço de referência da Embrepar
+        # NÃO conta como cotação — serve só de base pro pregão)
+        fornecedores_reais = list(nomes)
+
         # se algum item tem preço de referência, a Embrepar vira um "concorrente" na disputa
         if any("Embrepar" in pmap for pmap in precos.values()) and "Embrepar" not in nomes:
             nomes.append("Embrepar")
@@ -891,7 +895,9 @@ with aba_b:
             base = {"Código": codigo, "Produto": produto, "Marca": marca, "Quantidade": qtd}
             for nome in nomes:
                 base[nome] = pmap.get(nome, None)
-            if pmap:
+            # "cotou de verdade" = algum fornecedor real deu preço (Embrepar não conta)
+            cotacoes_reais = {n: p for n, p in pmap.items() if n in fornecedores_reais}
+            if cotacoes_reais:
                 vencedor = min(pmap, key=pmap.get)
                 preco_v = pmap[vencedor]
                 base["Vencedor"] = vencedor
@@ -899,15 +905,26 @@ with aba_b:
                 base["Total"] = round(preco_v * qtd, 2)
                 linhas.append(base)
             else:
-                sem_cotacao.append(base)
+                # nenhum concorrente cotou → sai da comparação e vai só pro arquivo à parte.
+                # se a Embrepar tem preço de referência, dá pra comprar dela;
+                # se nem a Embrepar tem (item veio do bloco "EM FALTA"), ninguém tem.
+                ref_emb = pmap.get("Embrepar")
+                sem_cotacao.append({
+                    "Código": codigo, "Produto": produto, "Marca": marca,
+                    "Quantidade": qtd,
+                    "Preço Referência Embrepar (R$)": ref_emb,
+                    "Situação": ("Comprar da Embrepar" if ref_emb is not None
+                                 else "NINGUÉM TEM (em falta na Embrepar)"),
+                })
 
-        if not linhas:
-            st.warning("Nenhum preço foi encontrado nas planilhas. Confira se a coluna de preço foi preenchida.")
+        if not linhas and not sem_cotacao:
+            st.warning("Nenhum item foi encontrado nas planilhas. Confira se subiu as cotações certas.")
             st.stop()
 
         resumo = pd.DataFrame(linhas)
         # ordena por marca/produto
-        resumo = resumo.sort_values(["Vencedor", "Produto"]).reset_index(drop=True)
+        if not resumo.empty:
+            resumo = resumo.sort_values(["Vencedor", "Produto"]).reset_index(drop=True)
         # guarda na sessão pra não perder ao clicar em salvar/baixar
         st.session_state["resultado_b"] = {
             "resumo": resumo, "nomes": nomes, "sem_cotacao": sem_cotacao,
@@ -918,47 +935,69 @@ with aba_b:
         r = st.session_state["resultado_b"]
         resumo, nomes, sem_cotacao = r["resumo"], r["nomes"], r["sem_cotacao"]
 
-        st.success(f"Comparei {len(resumo)} itens.")
+        st.success(f"Comparei {len(resumo)} item(ns) cotado(s).")
 
-        # totais por fornecedor
-        tot = resumo.groupby("Vencedor")["Total"].agg(["count", "sum"]).reset_index()
-        tot.columns = ["Fornecedor", "Itens", "Total R$"]
-        st.write("**Quanto você vai comprar de cada um:**")
-        st.dataframe(tot, use_container_width=True, hide_index=True)
+        if not resumo.empty:
+            # totais por fornecedor
+            tot = resumo.groupby("Vencedor")["Total"].agg(["count", "sum"]).reset_index()
+            tot.columns = ["Fornecedor", "Itens", "Total R$"]
+            st.write("**Quanto você vai comprar de cada um:**")
+            st.dataframe(tot, use_container_width=True, hide_index=True)
 
-        st.write("**Resumo (menor preço em destaque):**")
-        st.dataframe(resumo, use_container_width=True, hide_index=True)
+            st.write("**Resumo (menor preço em destaque):**")
+            st.dataframe(resumo, use_container_width=True, hide_index=True)
+
+        # ----- itens que NENHUM concorrente cotou (arquivo à parte) -----
+        df_sem = None
+        if sem_cotacao:
+            df_sem = pd.DataFrame(sem_cotacao)[
+                ["Código", "Produto", "Marca", "Quantidade",
+                 "Preço Referência Embrepar (R$)", "Situação"]]
+            n_ninguem_tem = int((df_sem["Situação"] != "Comprar da Embrepar").sum())
+            st.warning(f"⚠️ {len(df_sem)} item(ns) **nenhum concorrente cotou** — "
+                       "baixe o arquivo à parte abaixo.")
+            if n_ninguem_tem:
+                st.error(f"🚨 Desses, **{n_ninguem_tem} ninguém tem** "
+                         "(em falta na Embrepar E nenhum concorrente cotou).")
+            st.dataframe(df_sem, use_container_width=True, hide_index=True)
+            st.download_button(
+                "📥 Baixar itens que ninguém cotou",
+                data=excel_bytes({"Ninguem cotou": df_sem}),
+                file_name="itens_sem_cotacao.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                type="primary", use_container_width=True)
 
         # monta arquivo final: 1 aba resumo + 1 aba por fornecedor + sem cotação
-        abas = {"Resumo menor preço": resumo}
-        for nome in nomes:
-            comprar = resumo[resumo["Vencedor"] == nome][
-                ["Código", "Produto", "Marca", "Quantidade", "Preço unit", "Total"]]
-            abas[nome] = comprar
-        if sem_cotacao:
-            abas["Ninguem cotou"] = pd.DataFrame(sem_cotacao)[["Código", "Produto", "Marca", "Quantidade"]]
-            st.warning(f"{len(sem_cotacao)} item(ns) ninguém cotou — veja a aba 'Ninguem cotou' no arquivo.")
+        if not resumo.empty:
+            abas = {"Resumo menor preço": resumo}
+            for nome in nomes:
+                comprar = resumo[resumo["Vencedor"] == nome][
+                    ["Código", "Produto", "Marca", "Quantidade", "Preço unit", "Total"]]
+                abas[nome] = comprar
+            if df_sem is not None:
+                abas["Ninguem cotou"] = df_sem
 
-        cbaixa, czip = st.columns(2)
-        cbaixa.download_button(
-            "📥 Baixar relatório completo",
-            data=excel_relatorio(abas, "Resumo menor preço", nomes),
-            file_name="resultado_cotacao.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            type="primary", use_container_width=True)
-        czip.download_button(
-            "📦 Baixar pedidos por fornecedor (ZIP)",
-            data=zip_pedidos(resumo, nomes), file_name="pedidos_por_fornecedor.zip",
-            mime="application/zip", type="primary", use_container_width=True)
-        st.caption("📦 O ZIP traz um arquivo de pedido por fornecedor (e da Embrepar), "
-                   "só com o que cada um ganhou — é só mandar direto pra ele.")
+            cbaixa, czip = st.columns(2)
+            cbaixa.download_button(
+                "📥 Baixar relatório completo",
+                data=excel_relatorio(abas, "Resumo menor preço", nomes),
+                file_name="resultado_cotacao.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                type="primary", use_container_width=True)
+            czip.download_button(
+                "📦 Baixar pedidos por fornecedor (ZIP)",
+                data=zip_pedidos(resumo, nomes), file_name="pedidos_por_fornecedor.zip",
+                mime="application/zip", type="primary", use_container_width=True)
+            st.caption("📦 O ZIP traz um arquivo de pedido por fornecedor (e da Embrepar), "
+                       "só com o que cada um ganhou — é só mandar direto pra ele.")
 
-        with st.expander("💾 Salvar no histórico (Dashboard)"):
-            data_cot = st.date_input("Data desta cotação", value=date.today(),
-                                     format="DD/MM/YYYY", key="data_salvar")
-            if st.button("💾 Salvar no histórico"):
-                salvar_cotacao(data_cot, resumo, nomes)
-                st.success(f"Cotação de {data_cot.strftime('%d/%m/%Y')} salva! Veja na aba 📊 Dashboard.")
+        if not resumo.empty:
+            with st.expander("💾 Salvar no histórico (Dashboard)"):
+                data_cot = st.date_input("Data desta cotação", value=date.today(),
+                                         format="DD/MM/YYYY", key="data_salvar")
+                if st.button("💾 Salvar no histórico"):
+                    salvar_cotacao(data_cot, resumo, nomes)
+                    st.success(f"Cotação de {data_cot.strftime('%d/%m/%Y')} salva! Veja na aba 📊 Dashboard.")
 
 # ---------------- DASHBOARD ----------------
 with aba_dash:
