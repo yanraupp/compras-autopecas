@@ -5,6 +5,7 @@ Compras Auto Peças — separa o relatório do ERP por destino de compra
 Fase 1: Etapa A (separar) + Etapa B (comparar preços).
 """
 import io
+import os
 import re
 import json
 import zipfile
@@ -356,9 +357,40 @@ def linhas_da_planilha(arquivo):
     return linhas
 
 
-def ler_bloco_embrepar(arquivo):
+@st.cache_data(show_spinner=False)
+def carrega_catalogo():
+    """Carrega o dicionário código → descrição do produto (exportado do ERP).
+    Usado pra preencher a descrição quando POA/Pelotas vêm só com o código."""
+    import json
+    caminho = os.path.join(os.path.dirname(__file__), "dados", "catalogo.json")
+    try:
+        with open(caminho, encoding="utf-8") as f:
+            exato = json.load(f)
+    except (FileNotFoundError, ValueError):
+        return {}, {}
+    # mapa secundário sem zeros à esquerda (o ERP guarda 411548, a Embrepar manda 0411548)
+    sem_zero = {}
+    for cod, desc in exato.items():
+        k = cod.lstrip("0")
+        if k and k not in sem_zero:
+            sem_zero[k] = desc
+    return exato, sem_zero
+
+
+def descricao_do_catalogo(codigo, catalogo):
+    """Acha a descrição de um código no catálogo do ERP. Tenta a forma exata e,
+    se não achar, ignora os zeros à esquerda. Devolve '' se não existir."""
+    exato, sem_zero = catalogo
+    c = str(codigo).strip().upper()
+    if c in exato:
+        return exato[c]
+    return sem_zero.get(c.lstrip("0"), "")
+
+
+def ler_bloco_embrepar(arquivo, catalogo=None):
     """Lê uma das planilhas da Embrepar (POA/Pelotas/Falta) e devolve lista de itens.
-    Cada arquivo tem layout um pouco diferente, então acha o cabeçalho sozinho."""
+    Cada arquivo tem layout um pouco diferente, então acha o cabeçalho sozinho.
+    Se a descrição vier vazia ou igual ao código, busca o nome real no catálogo do ERP."""
     rows = linhas_da_planilha(arquivo)
     hdr_idx, hdr = None, None
     for i, r in enumerate(rows):
@@ -392,9 +424,17 @@ def ler_bloco_embrepar(arquivo):
         cod = r[ic] if ic is not None and ic < len(r) else None
         if cod is None or str(cod).strip() == "":
             continue
+        codigo = str(cod).strip()
+        produto = str(r[ipd]).strip() if ipd is not None and ipd < len(r) and r[ipd] is not None else ""
+        # POA/Pelotas às vezes vêm sem descrição (produto vazio ou igual ao código).
+        # Nesse caso, busca o nome real da peça no catálogo do ERP.
+        if catalogo and (produto == "" or produto.upper() == codigo.upper()):
+            do_cat = descricao_do_catalogo(codigo, catalogo)
+            if do_cat:
+                produto = do_cat
         itens.append({
-            "Código": str(cod).strip(),
-            "Produto": str(r[ipd]).strip() if ipd is not None and ipd < len(r) and r[ipd] is not None else "",
+            "Código": codigo,
+            "Produto": produto,
             "Marca": str(r[im]).strip() if im is not None and im < len(r) and r[im] is not None else "",
             "Quantidade": so_numero_qtd(r[iq]) if iq is not None and iq < len(r) else 0,
             "Preço Embrepar (R$)": para_preco(r[ip]) if ip is not None and ip < len(r) else None,
@@ -423,6 +463,7 @@ def condensar_embrepar(arq_poa, arq_pelotas, arq_falta):
     import openpyxl
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
+    catalogo = carrega_catalogo()   # dicionário código → descrição (do ERP)
     blocos = []
     contagem = {}
     for rotulo, arq, cor in [
@@ -430,7 +471,7 @@ def condensar_embrepar(arq_poa, arq_pelotas, arq_falta):
         ("PELOTAS", arq_pelotas, "8957E5"),
         ("EM FALTA", arq_falta, "D29922"),
     ]:
-        itens = ler_bloco_embrepar(arq) if arq is not None else []
+        itens = ler_bloco_embrepar(arq, catalogo) if arq is not None else []
         contagem[rotulo] = len(itens)
         blocos.append((rotulo, cor, itens))
 
@@ -879,10 +920,6 @@ with aba_b:
                         so_numero_qtd(r[qtd]) if qtd else 0,
                     )
 
-        # nomes dos fornecedores DE VERDADE (o preço de referência da Embrepar
-        # NÃO conta como cotação — serve só de base pro pregão)
-        fornecedores_reais = list(nomes)
-
         # se algum item tem preço de referência, a Embrepar vira um "concorrente" na disputa
         if any("Embrepar" in pmap for pmap in precos.values()) and "Embrepar" not in nomes:
             nomes.append("Embrepar")
@@ -895,9 +932,9 @@ with aba_b:
             base = {"Código": codigo, "Produto": produto, "Marca": marca, "Quantidade": qtd}
             for nome in nomes:
                 base[nome] = pmap.get(nome, None)
-            # "cotou de verdade" = algum fornecedor real deu preço (Embrepar não conta)
-            cotacoes_reais = {n: p for n, p in pmap.items() if n in fornecedores_reais}
-            if cotacoes_reais:
+            # a Embrepar é um concorrente de verdade: se ELA tem preço, o item FOI cotado.
+            # só vai pro "ninguém tem" quando pmap está vazio (nem fornecedor, nem Embrepar).
+            if pmap:
                 vencedor = min(pmap, key=pmap.get)
                 preco_v = pmap[vencedor]
                 base["Vencedor"] = vencedor
@@ -905,16 +942,11 @@ with aba_b:
                 base["Total"] = round(preco_v * qtd, 2)
                 linhas.append(base)
             else:
-                # nenhum concorrente cotou → sai da comparação e vai só pro arquivo à parte.
-                # se a Embrepar tem preço de referência, dá pra comprar dela;
-                # se nem a Embrepar tem (item veio do bloco "EM FALTA"), ninguém tem.
-                ref_emb = pmap.get("Embrepar")
+                # ninguém tem: nem os fornecedores, nem a Embrepar (item do bloco "EM FALTA").
                 sem_cotacao.append({
                     "Código": codigo, "Produto": produto, "Marca": marca,
                     "Quantidade": qtd,
-                    "Preço Referência Embrepar (R$)": ref_emb,
-                    "Situação": ("Comprar da Embrepar" if ref_emb is not None
-                                 else "NINGUÉM TEM (em falta na Embrepar)"),
+                    "Situação": "NINGUÉM TEM (em falta na Embrepar)",
                 })
 
         if not linhas and not sem_cotacao:
@@ -951,14 +983,9 @@ with aba_b:
         df_sem = None
         if sem_cotacao:
             df_sem = pd.DataFrame(sem_cotacao)[
-                ["Código", "Produto", "Marca", "Quantidade",
-                 "Preço Referência Embrepar (R$)", "Situação"]]
-            n_ninguem_tem = int((df_sem["Situação"] != "Comprar da Embrepar").sum())
-            st.warning(f"⚠️ {len(df_sem)} item(ns) **nenhum concorrente cotou** — "
-                       "baixe o arquivo à parte abaixo.")
-            if n_ninguem_tem:
-                st.error(f"🚨 Desses, **{n_ninguem_tem} ninguém tem** "
-                         "(em falta na Embrepar E nenhum concorrente cotou).")
+                ["Código", "Produto", "Marca", "Quantidade", "Situação"]]
+            st.error(f"🚨 {len(df_sem)} item(ns) **ninguém tem** — em falta na Embrepar "
+                     "E nenhum fornecedor cotou. Baixe o arquivo à parte abaixo.")
             st.dataframe(df_sem, use_container_width=True, hide_index=True)
             st.download_button(
                 "📥 Baixar itens que ninguém cotou",
