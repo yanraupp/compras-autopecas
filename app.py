@@ -377,14 +377,41 @@ def carrega_catalogo():
     return exato, sem_zero
 
 
-def descricao_do_catalogo(codigo, catalogo):
-    """Acha a descrição de um código no catálogo do ERP. Tenta a forma exata e,
-    se não achar, ignora os zeros à esquerda. Devolve '' se não existir."""
+def descricao_do_catalogo(codigo, marca, catalogo):
+    """Acha a descrição de um código no catálogo do ERP.
+    O ERP guarda o código COM o prefixo da marca (ex.: 3RHO3396, AJ087126, AMP64033),
+    mas a Embrepar manda SEM o prefixo (RHO3396, 087126, 64033). Então tenta, nessa ordem:
+      1. o código exato;
+      2. o código sem zeros à esquerda;
+      3. uma chave do catálogo que TERMINE com o código e cujo prefixo bata com a marca
+         (só aceita se sobrar uma única peça possível, pra não chutar errado).
+    Devolve '' se não existir — aí a coluna Produto fica em branco em vez de repetir o código."""
     exato, sem_zero = catalogo
     c = str(codigo).strip().upper()
     if c in exato:
         return exato[c]
-    return sem_zero.get(c.lstrip("0"), "")
+    sz = c.lstrip("0")
+    if sz and sz in sem_zero:
+        return sem_zero[sz]
+    # 3) casa pelo sufixo, validando o prefixo contra a marca pra não pegar peça errada
+    m = str(marca).strip().upper().replace(" ", "")
+    if not m:
+        return ""
+    achado = ""
+    for chave, desc in exato.items():
+        k = chave.upper()
+        if k.endswith(c):
+            base = c
+        elif sz and k.endswith(sz):
+            base = sz
+        else:
+            continue
+        prefixo = k[:len(k) - len(base)]
+        if prefixo == "" or m.startswith(prefixo):
+            if achado:
+                return ""          # ambíguo: mais de uma peça possível, melhor não chutar
+            achado = desc
+    return achado
 
 
 def ler_bloco_embrepar(arquivo, catalogo=None):
@@ -426,16 +453,16 @@ def ler_bloco_embrepar(arquivo, catalogo=None):
             continue
         codigo = str(cod).strip()
         produto = str(r[ipd]).strip() if ipd is not None and ipd < len(r) and r[ipd] is not None else ""
+        marca = str(r[im]).strip() if im is not None and im < len(r) and r[im] is not None else ""
         # POA/Pelotas às vezes vêm sem descrição (produto vazio ou igual ao código).
-        # Nesse caso, busca o nome real da peça no catálogo do ERP.
+        # Busca o nome real no catálogo do ERP. Se não achar, deixa em branco em vez de
+        # repetir o código na coluna Produto (era isso que ficava duplicado).
         if catalogo and (produto == "" or produto.upper() == codigo.upper()):
-            do_cat = descricao_do_catalogo(codigo, catalogo)
-            if do_cat:
-                produto = do_cat
+            produto = descricao_do_catalogo(codigo, marca, catalogo)
         itens.append({
             "Código": codigo,
             "Produto": produto,
-            "Marca": str(r[im]).strip() if im is not None and im < len(r) and r[im] is not None else "",
+            "Marca": marca,
             "Quantidade": so_numero_qtd(r[iq]) if iq is not None and iq < len(r) else 0,
             "Preço Embrepar (R$)": para_preco(r[ip]) if ip is not None and ip < len(r) else None,
         })
