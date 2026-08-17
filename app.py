@@ -236,6 +236,13 @@ def carregar_marcas():
     return cat, mapa
 
 
+def salvar_marcas(cat):
+    """Grava o dicionário CATEGORIA->[marcas] no marcas.json e limpa o cache."""
+    limpo = {k: sorted(set(m.strip().upper() for m in v if m.strip())) for k, v in cat.items()}
+    MARCAS_PATH.write_text(json.dumps(limpo, ensure_ascii=False, indent=1), encoding="utf-8")
+    carregar_marcas.clear()
+
+
 def normaliza(texto):
     """Deixa o texto comparável: maiúsculo, sem acento e sem espaços sobrando."""
     if texto is None:
@@ -1166,12 +1173,51 @@ with aba_dash:
 # ---------------- CONFIG ----------------
 with aba_cfg:
     st.subheader("Marcas cadastradas por categoria")
-    st.write("Estas são as marcas fixas. Se aparecer marca 'não classificada', é porque ela não está aqui.")
+    st.write("Se aparecer marca 'não classificada' na Etapa A, é porque ela não está aqui. Cadastre abaixo.")
     c1, c2, c3 = st.columns(3)
     cartao(c1, "c-fora", len(categorias["FORA"]), "Cotação FORA")
     cartao(c2, "c-emb", len(categorias["EMBREPAR"]), "Embrepar")
     cartao(c3, "c-rede", len(categorias["REDE"]), "Rede")
     st.write("")
+
+    st.markdown("#### ➕ Adicionar marcas")
+    with st.form("form_add_marca", clear_on_submit=True):
+        cat_nova = st.selectbox("Categoria", ["FORA", "EMBREPAR", "REDE"])
+        txt_novas = st.text_area("Marcas (uma por linha ou separadas por vírgula)",
+                                 placeholder="BOSCH\nCOFAP, NAKATA")
+        add = st.form_submit_button("Salvar marcas", type="primary")
+    if add:
+        novas = [m.strip().upper() for m in re.split(r"[\n,;]+", txt_novas) if m.strip()]
+        if not novas:
+            st.warning("Digite pelo menos uma marca.")
+        else:
+            adicionadas, movidas = [], []
+            for m in novas:
+                for outra in ["FORA", "EMBREPAR", "REDE"]:
+                    if outra != cat_nova and m in categorias[outra]:
+                        categorias[outra].remove(m)
+                        movidas.append(f"{m} (saiu de {outra})")
+                if m not in categorias[cat_nova]:
+                    categorias[cat_nova].append(m)
+                    adicionadas.append(m)
+            salvar_marcas(categorias)
+            msg = f"✅ {len(adicionadas)} marca(s) salva(s) em {cat_nova}: {', '.join(adicionadas) or '—'}"
+            if movidas:
+                msg += f"\n\n↪️ Movidas de outra categoria: {', '.join(movidas)}"
+            st.success(msg)
+            st.rerun()
+
+    st.markdown("#### 🗑️ Remover marca")
+    todas = sorted(f"{m}  —  {c}" for c in categorias for m in categorias[c])
+    escolha = st.selectbox("Escolha a marca", ["(selecione)"] + todas, key="rm_marca")
+    if escolha != "(selecione)" and st.button("Remover", key="btn_rm_marca"):
+        nome_m, cat_m = [x.strip() for x in escolha.split("—")]
+        categorias[cat_m].remove(nome_m)
+        salvar_marcas(categorias)
+        st.success(f"Marca {nome_m} removida de {cat_m}.")
+        st.rerun()
+
+    st.markdown("#### 🔎 Consultar")
     busca = st.text_input("Procurar uma marca")
     for nome in ["FORA", "EMBREPAR", "REDE"]:
         lst = categorias[nome]
@@ -1179,3 +1225,8 @@ with aba_cfg:
             lst = [m for m in lst if normaliza(busca) in normaliza(m)]
         with st.expander(f"{nome} ({len(lst)})"):
             st.write(", ".join(sorted(lst)) if lst else "—")
+
+    st.write("")
+    st.download_button("⬇️ Baixar backup das marcas (marcas.json)",
+                       data=json.dumps(categorias, ensure_ascii=False, indent=1).encode("utf-8"),
+                       file_name="marcas.json", mime="application/json")
