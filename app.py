@@ -236,11 +236,56 @@ def carregar_marcas():
     return cat, mapa
 
 
+def _github_cfg():
+    """Devolve (token, repo, branch) dos secrets, ou None se não configurado."""
+    try:
+        token = st.secrets["github_token"]
+    except Exception:
+        return None
+    repo = st.secrets.get("github_repo", "yanraupp/compras-autopecas")
+    branch = st.secrets.get("github_branch", "main")
+    return token, repo, branch
+
+
+def salvar_marcas_github(texto):
+    """Sobe o marcas.json pro GitHub (é de onde o Streamlit Cloud lê). Devolve msg de erro ou None."""
+    cfg = _github_cfg()
+    if not cfg:
+        return None
+    token, repo, branch = cfg
+    import base64, urllib.request, urllib.error
+    url = f"https://api.github.com/repos/{repo}/contents/dados/marcas.json"
+    hdr = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json",
+           "User-Agent": "compras-autopecas"}
+    try:
+        req = urllib.request.Request(f"{url}?ref={branch}", headers=hdr)
+        with urllib.request.urlopen(req, timeout=15) as r:
+            sha = json.load(r).get("sha")
+        corpo = json.dumps({
+            "message": "Marcas atualizadas pelo app",
+            "content": base64.b64encode(texto.encode("utf-8")).decode("ascii"),
+            "sha": sha, "branch": branch,
+        }).encode("utf-8")
+        req = urllib.request.Request(url, data=corpo, headers=hdr, method="PUT")
+        with urllib.request.urlopen(req, timeout=15):
+            pass
+        return None
+    except urllib.error.HTTPError as e:
+        return f"GitHub respondeu {e.code}: {e.read().decode('utf-8', 'ignore')[:200]}"
+    except Exception as e:
+        return str(e)
+
+
 def salvar_marcas(cat):
-    """Grava o dicionário CATEGORIA->[marcas] no marcas.json e limpa o cache."""
+    """Grava o dicionário CATEGORIA->[marcas] no marcas.json (local + GitHub, se configurado) e limpa o cache."""
     limpo = {k: sorted(set(m.strip().upper() for m in v if m.strip())) for k, v in cat.items()}
-    MARCAS_PATH.write_text(json.dumps(limpo, ensure_ascii=False, indent=1), encoding="utf-8")
+    texto = json.dumps(limpo, ensure_ascii=False, indent=1)
+    MARCAS_PATH.write_text(texto, encoding="utf-8")
     carregar_marcas.clear()
+    erro = salvar_marcas_github(texto)
+    if erro:
+        st.warning("Salvou aqui no app, mas não conseguiu gravar no GitHub (pode se perder se o app reiniciar). "
+                   f"Detalhe: {erro}")
 
 
 def normaliza(texto):
@@ -1179,6 +1224,10 @@ with aba_cfg:
     cartao(c2, "c-emb", len(categorias["EMBREPAR"]), "Embrepar")
     cartao(c3, "c-rede", len(categorias["REDE"]), "Rede")
     st.write("")
+    if _github_cfg():
+        st.caption("☁️ Marcas salvas também no GitHub — não se perdem quando o app reinicia.")
+    else:
+        st.caption("💾 Marcas salvas só neste computador. (No Streamlit Cloud, configure `github_token` nos secrets pra não perder ao reiniciar.)")
 
     st.markdown("#### ➕ Adicionar marcas")
     with st.form("form_add_marca", clear_on_submit=True):
